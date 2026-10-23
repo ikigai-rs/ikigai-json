@@ -82,9 +82,10 @@ cannot catch it.
 | path length (`getpath`, `setpath`, `delpaths`) | 512 | `InvalidArgument` `q` |
 | total output | 8 MiB | `InvalidArgument` `q` |
 
-The fuel budget runs out in about 0.6 s in a release build and about 3 s in a debug build
-(measured with other builds sharing the CPU), so fuel is normally the bound that stops a loop and
-the wall clock is a backstop. `tests/sandbox.rs` runs each hostile program in a child process: deep
+The fuel budget runs out in about 0.6 s in a release build (measured with other builds sharing
+the CPU), so in a release build fuel, which is deterministic, is the bound that stops a loop and
+the wall clock is a backstop. A debug build takes about 3 s here and longer on a slow CI runner,
+where the clock can stop it first. `tests/sandbox.rs` runs each hostile program in a child process: deep
 recursion, values nested ten million deep and then serialized, compared, walked or put into an
 error message, string, array and integer bombs, shared structure that would expand to 2^40 nodes,
 and `fromjson` on a megabyte of `[`. Each of them has to be refused without taking the process
