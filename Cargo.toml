@@ -12,3 +12,22 @@ keywords = ["ikigai", "roc", "jq", "csv", "json"]
 categories = ["wasm", "parser-implementations"]
 
 [dependencies]
+# 0.1.108 is the true minimum: `Error::OverBudget`, the error a computation that ran past
+# a bound the caller holds is (fuel, time). `AsyncFnEndpoint`, `space_iri` and the
+# name-dropping `bind` are older. Under 0.x a caret is a range: every 0.1.x from 0.1.108.
+ikigai-core = "0.1.108"
+# jaq: a jq implementation in Rust (MIT, Michael Faerber). 3.1 is the line whose parser
+# and compiler API (`load::parse`, `Loader::new(prelude)`, `Native::with_update`) the
+# sandbox rewrites programs through; its syntax tree is matched exhaustively, so a new
+# term variant upstream is a compile error here rather than an unguarded construct.
+jaq-core = "3.1.2"
+# Default features: the time functions (UTC only are offered), math, format. The
+# natives that read the environment, the clock or the log are filtered out by name.
+jaq-std = "3.0.4"
+jaq-json = "2.0.3"
+# RFC 4180 reading and writing.
+csv = "1.4"
+
+[dev-dependencies]
+futures = "0.3"
+ikigai-conformance = "0.10.0"
