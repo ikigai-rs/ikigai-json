@@ -29,9 +29,9 @@
 //! 5. **Bounded output.** Every result is walked for depth and size before it is serialized, and
 //!    the total is capped.
 //!
-//! On wasm there are no threads and no clock: (1) keeps its fuel and stack checks, (4) and the
-//! wall-clock budget do not exist, and an unwind is an abort, which traps the in-page kernel
-//! rather than returning a refusal. The page is a single user's, and a trap reaches nothing
+//! On wasm there are no worker threads: (4) does not apply. The host can supply a clock
+//! for (1), including through the kernel invocation. An unwind is an abort, trapping the
+//! in-page kernel rather than returning a refusal. The page is a single user's, and a trap reaches nothing
 //! else, so the bound still holds there; it is just less polite.
 
 use std::cell::Cell;
@@ -58,7 +58,7 @@ pub struct Limits {
     /// How much work a run may do, in fuel units (one per context clone, collected element,
     /// walked node, or unit of guarded arithmetic).
     pub fuel: u64,
-    /// The wall-clock budget, in milliseconds (native targets only; wasm has no clock).
+    /// The wall-clock budget, in milliseconds. On wasm a caller must supply a clock.
     pub time_budget_ms: u64,
     /// The deepest value a run may build, compare, sort or serialize.
     pub max_depth: usize,
@@ -95,7 +95,7 @@ pub const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 /// record of a large document several times over.
 pub const FUEL: u64 = 20_000_000;
 /// The wall-clock budget: 5 seconds. Fuel is the deterministic bound; this one catches a slow
-/// machine or a debug build, and only on targets that have a clock.
+/// machine or a debug build. On wasm the caller supplies the clock.
 pub const TIME_BUDGET_MS: u64 = 5_000;
 /// The deepest value a run may build or consume: 512, twice [`MAX_JSON_NESTING`](crate::MAX_JSON_NESTING),
 /// so a query can wrap its deepest input a few times over.
@@ -371,7 +371,9 @@ fn exhaust(bound: &'static str, detail: String) -> ! {
 // --- the meter --------------------------------------------------------------------------
 
 /// What a run has spent, and where it must stop.
-pub(crate) struct Meter {
+pub(crate) struct Meter<'a> {
+    now: Option<&'a (dyn Fn() -> Option<ikigai_core::Time> + Sync)>,
+    host_deadline: Option<ikigai_core::Time>,
     used: Cell<u64>,
     next_check: Cell<u64>,
     limits: Limits,
@@ -392,9 +394,16 @@ fn stack_position() -> usize {
     std::hint::black_box(&here) as *const u8 as usize
 }
 
-impl Meter {
-    fn new(limits: Limits) -> Self {
+impl<'a> Meter<'a> {
+    fn new(
+        limits: Limits,
+        now: Option<&'a (dyn Fn() -> Option<ikigai_core::Time> + Sync)>,
+    ) -> Self {
         Meter {
+            host_deadline: now
+                .and_then(|now| now())
+                .map(|t| t.plus_millis(limits.time_budget_ms)),
+            now,
             used: Cell::new(0),
             next_check: Cell::new(CHECK_EVERY),
             limits,
@@ -433,8 +442,20 @@ impl Meter {
         }
         if used >= self.next_check.get() {
             self.next_check.set(used + CHECK_EVERY);
-            #[cfg(not(target_family = "wasm"))]
-            if std::time::Instant::now() > self.deadline {
+            let timed_out = match (self.now, self.host_deadline) {
+                (Some(now), Some(deadline)) => now().is_some_and(|time| time > deadline),
+                _ => {
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        std::time::Instant::now() > self.deadline
+                    }
+                    #[cfg(target_family = "wasm")]
+                    {
+                        false
+                    }
+                }
+            };
+            if timed_out {
                 std::panic::resume_unwind(Box::new(Exhausted(Refusal::Timeout(format!(
                     "the jq program ran past its {} ms budget",
                     self.limits.time_budget_ms
@@ -485,7 +506,7 @@ impl DataT for Sandbox {
 /// every pipe, call, binding and fold step, and every clone is charged.
 pub(crate) struct Metered<'a> {
     lut: &'a jaq_core::Lut<Sandbox>,
-    meter: &'a Meter,
+    meter: &'a Meter<'a>,
 }
 
 impl Clone for Metered<'_> {
@@ -504,7 +525,7 @@ impl<'a> data::HasLut<'a, Sandbox> for Metered<'a> {
     }
 }
 
-fn meter<'a>(cv: &Cv<'a, Sandbox>) -> &'a Meter {
+fn meter<'a>(cv: &Cv<'a, Sandbox>) -> &'a Meter<'a> {
     cv.0.data().meter
 }
 
@@ -1174,7 +1195,7 @@ pub struct Output {
 }
 
 /// Run `program` over the JSON document `input` under `limits`, returning every result in
-/// order.
+/// order. On wasm, use [`run_with_clock`] to enforce the wall-clock budget as well as fuel.
 ///
 /// ```
 /// use ikigai_json::sandbox::{run, Limits};
@@ -1194,12 +1215,46 @@ pub fn run(program: &str, input: &[u8], limits: &Limits) -> Result<Vec<Output>, 
     Ok(outputs)
 }
 
+/// Run with a host clock, including on wasm. A clock returning `None` leaves
+/// native calls using their monotonic fallback and wasm calls bounded by fuel.
+pub fn run_with_clock(
+    program: &str,
+    input: &[u8],
+    limits: &Limits,
+    now: &(dyn Fn() -> Option<ikigai_core::Time> + Sync),
+) -> Result<Vec<Output>, Refusal> {
+    let mut outputs = Vec::new();
+    run_each_clock(
+        program,
+        input,
+        limits,
+        limits.max_output_bytes,
+        Some(now),
+        |output| {
+            outputs.push(output);
+            true
+        },
+    )?;
+    Ok(outputs)
+}
+
 // Returning false cancels evaluation, including when the body consumer has gone away.
 pub(crate) fn run_each(
     program: &str,
     input: &[u8],
     limits: &Limits,
     max_value_bytes: usize,
+    emit: impl FnMut(Output) -> bool + Send,
+) -> Result<(), Refusal> {
+    run_each_clock(program, input, limits, max_value_bytes, None, emit)
+}
+
+fn run_each_clock(
+    program: &str,
+    input: &[u8],
+    limits: &Limits,
+    max_value_bytes: usize,
+    now: Option<&(dyn Fn() -> Option<ikigai_core::Time> + Sync)>,
     emit: impl FnMut(Output) -> bool + Send,
 ) -> Result<(), Refusal> {
     if program.len() > limits.max_program_bytes {
@@ -1227,7 +1282,7 @@ pub(crate) fn run_each(
         )));
     }
     let limits = *limits;
-    on_eval_stack(move || evaluate(program, input, limits, max_value_bytes, emit))
+    on_eval_stack(move || evaluate(program, input, limits, max_value_bytes, now, emit))
 }
 
 /// Run `work` on a thread of [`EVAL_STACK`] (native) and turn a bound's unwind into its
@@ -1272,9 +1327,10 @@ fn evaluate(
     input: &[u8],
     limits: Limits,
     max_value_bytes: usize,
+    now: Option<&(dyn Fn() -> Option<ikigai_core::Time> + Sync)>,
     mut emit: impl FnMut(Output) -> bool,
 ) -> Result<(), Refusal> {
-    let meter = Meter::new(limits);
+    let meter = Meter::new(limits, now);
     // Parse once through the loader for its error messages (it also refuses `import` and
     // `include`, since no module can be read), then once more for the tree to rewrite.
     let arena = Arena::default();

@@ -226,7 +226,10 @@ fn query_bytes() -> AsyncFnEndpoint {
             let src = src_iri(inv)?;
             let input = read_json(inv, &src).await?;
             let outputs =
-                sandbox::run(&program, &input, &sandbox::Limits::default()).map_err(refusal)?;
+                sandbox::run_with_clock(&program, &input, &sandbox::Limits::default(), &|| {
+                    inv.now()
+                })
+                .map_err(refusal)?;
             answer(outputs, media)
         })
     })
