@@ -1141,7 +1141,7 @@ impl std::fmt::Write for Bounded {
 }
 
 /// Format `v` with jaq's own `Display`, or `None` past `limit` bytes.
-fn serialize(v: &dyn std::fmt::Display, limit: usize) -> Option<String> {
+pub(crate) fn serialize(v: &dyn std::fmt::Display, limit: usize) -> Option<String> {
     let mut w = Bounded {
         buf: String::new(),
         limit,
@@ -1186,6 +1186,22 @@ pub struct Output {
 /// assert_eq!(out[0].scalar_text.as_deref(), Some("b"));
 /// ```
 pub fn run(program: &str, input: &[u8], limits: &Limits) -> Result<Vec<Output>, Refusal> {
+    let mut outputs = Vec::new();
+    run_each(program, input, limits, limits.max_output_bytes, |output| {
+        outputs.push(output);
+        true
+    })?;
+    Ok(outputs)
+}
+
+// Returning false cancels evaluation, including when the body consumer has gone away.
+pub(crate) fn run_each(
+    program: &str,
+    input: &[u8],
+    limits: &Limits,
+    max_value_bytes: usize,
+    emit: impl FnMut(Output) -> bool + Send,
+) -> Result<(), Refusal> {
     if program.len() > limits.max_program_bytes {
         return Err(Refusal::Bound {
             bound: "program",
@@ -1211,14 +1227,14 @@ pub fn run(program: &str, input: &[u8], limits: &Limits) -> Result<Vec<Output>, 
         )));
     }
     let limits = *limits;
-    on_eval_stack(move || evaluate(program, input, limits))
+    on_eval_stack(move || evaluate(program, input, limits, max_value_bytes, emit))
 }
 
 /// Run `work` on a thread of [`EVAL_STACK`] (native) and turn a bound's unwind into its
 /// refusal. Any other panic is a bug and is resumed as one.
-fn on_eval_stack<F>(work: F) -> Result<Vec<Output>, Refusal>
+fn on_eval_stack<F>(work: F) -> Result<(), Refusal>
 where
-    F: FnOnce() -> Result<Vec<Output>, Refusal> + Send,
+    F: FnOnce() -> Result<(), Refusal> + Send,
 {
     let guarded = move || match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
         Ok(result) => result,
@@ -1251,7 +1267,13 @@ where
     }
 }
 
-fn evaluate(program: &str, input: &[u8], limits: Limits) -> Result<Vec<Output>, Refusal> {
+fn evaluate(
+    program: &str,
+    input: &[u8],
+    limits: Limits,
+    max_value_bytes: usize,
+    mut emit: impl FnMut(Output) -> bool,
+) -> Result<(), Refusal> {
     let meter = Meter::new(limits);
     // Parse once through the loader for its error messages (it also refuses `import` and
     // `include`, since no module can be read), then once more for the tree to rewrite.
@@ -1294,14 +1316,16 @@ fn evaluate(program: &str, input: &[u8], limits: Limits) -> Result<Vec<Output>, 
         },
         Vars::new([]),
     );
-    let mut outputs = Vec::new();
     let mut total = 0usize;
     for result in filter.id.run((ctx, input)) {
         let v = match jaq_core::unwrap_valr(result) {
             Ok(v) => v,
             Err(e) => return Err(Refusal::Runtime(clipped(&e, 1024))),
         };
-        let left = limits.max_output_bytes.saturating_sub(total);
+        let left = limits
+            .max_output_bytes
+            .saturating_sub(total)
+            .min(max_value_bytes);
         walk(&meter, &v, "a result", Some((left as u64, "output")));
         let Some(json) = serialize(&v, left) else {
             exhaust(
@@ -1318,9 +1342,11 @@ fn evaluate(program: &str, input: &[u8], limits: Limits) -> Result<Vec<Output>, 
             Val::Arr(_) | Val::Obj(_) => None,
             _ => Some(json.clone()),
         };
-        outputs.push(Output { json, scalar_text });
+        if !emit(Output { json, scalar_text }) {
+            break;
+        }
     }
-    Ok(outputs)
+    Ok(())
 }
 
 /// Every native jaq offers, as `name/arity` — for the classification test.
@@ -1341,4 +1367,24 @@ pub fn upstream_defs() -> Vec<String> {
         .chain(jaq_json::defs())
         .map(|d| format!("{}/{}", d.name, d.args.len()))
         .collect()
+}
+
+#[cfg(test)]
+mod stream_tests {
+    #[test]
+    fn stopping_the_consumer_stops_before_the_next_jq_result() {
+        let mut seen = 0;
+        super::run_each(
+            "0, error(\"must not run\")",
+            b"null",
+            &super::Limits::default(),
+            100,
+            |_| {
+                seen += 1;
+                false
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, 1);
+    }
 }

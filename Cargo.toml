@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-json"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "JSON and CSV as resources for ikigai: urn:json:query runs a jq program (jaq) over any resource, and CSV reads as JSON through a registered transreptor."
@@ -14,7 +14,7 @@ categories = ["wasm", "parser-implementations"]
 [dependencies]
 # 0.2.0 is the streams release (ledger #2261). Under 0.x rules, the old
 # 0.1 pin meant <0.2.0.
-ikigai-core = "0.2.0"
+ikigai-core = "0.2.1"
 # jaq: a jq implementation in Rust (MIT, Michael Faerber). 3.1 is the line whose parser
 # and compiler API (`load::parse`, `Loader::new(prelude)`, `Native::with_update`) the
 # sandbox rewrites programs through; its syntax tree is matched exhaustively, so a new
@@ -27,6 +27,9 @@ jaq-json = "2.0.3"
 # RFC 4180 reading and writing.
 csv = "1.4"
 
-[dev-dependencies]
+async-trait = "0.1"
 futures = "0.3"
+csv-core = "0.1"
+
+[dev-dependencies]
 ikigai-conformance = "0.11.0"

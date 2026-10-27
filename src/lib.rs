@@ -48,6 +48,7 @@
 pub mod csv_json;
 pub mod sandbox;
 mod scan;
+mod streaming;
 
 pub use csv_json::{csv_to_json, json_to_csv, CsvRefusal};
 pub use scan::{nesting, MAX_JSON_NESTING};
@@ -217,7 +218,7 @@ fn answer(outputs: Vec<sandbox::Output>, media: &str) -> Result<Representation> 
 // --- endpoints ------------------------------------------------------------------------------
 
 /// `urn:json:query`: run the jq program `q` over the JSON resource `src`.
-pub fn query() -> AsyncFnEndpoint {
+fn query_bytes() -> AsyncFnEndpoint {
     AsyncFnEndpoint::new("json-query", |inv| {
         Box::pin(async move {
             let program = inv.inline_str("q")?.to_string();
@@ -267,7 +268,7 @@ pub fn query() -> AsyncFnEndpoint {
 
 /// `urn:json:from-csv`: read the piped CSV as JSON (see [`csv_to_json`]). Also the registered
 /// `text/csv` → `application/json` transreptor.
-pub fn from_csv() -> FnEndpoint {
+fn from_csv_bytes() -> FnEndpoint {
     FnEndpoint::new("json-from-csv", |inv: &Invocation<'_>| {
         wanted(inv, &[JSON])?;
         let header = match inv.inline_str("header").map(str::trim) {
@@ -385,4 +386,14 @@ pub fn space() -> EndpointSpace {
         .bind(Exact::new("urn:json:to-csv"), to_csv())
         // LAST: a later `bind` drops the name.
         .named(space_iri("json"))
+}
+
+/// The jq endpoint, with a one-shot NDJSON body path beside the bounded bytes path.
+pub fn query() -> impl ikigai_core::Endpoint {
+    streaming::Query(query_bytes())
+}
+
+/// The CSV endpoint, with an incremental body path beside the bounded bytes path.
+pub fn from_csv() -> impl ikigai_core::Endpoint {
+    streaming::FromCsv(from_csv_bytes())
 }

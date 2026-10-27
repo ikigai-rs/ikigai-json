@@ -30,7 +30,7 @@ The space names itself `urn:iki:space:json` (`ikigai_json::SPACE_ID`).
 **`urn:json:query`** reads `src` through the kernel **under the caller's capability**. It adds no
 authority of its own, so a caller who cannot read `src` cannot query it either. A `src` that is
 not JSON goes through whatever transreptor chain the kernel can plan to `application/json`. That
-is how jq reads CSV with no CSV query language. The answer is cacheable exactly when the read of
+is how jq reads CSV with no CSV query language. The collected JSON and text answers are cacheable when the read of
 `src` is, and it hangs on `src`'s golden thread, so it recomputes when `src` changes.
 
 A jq program yields a stream of results, and they become one answer like this:
@@ -54,6 +54,32 @@ their keys, in the order first seen) or an array of arrays. It writes CRLF line 
 a field only when it has to. Null and a missing key become empty fields, and a nested value is
 refused. It is the `application/json` → `text/csv` transreptor and is declared lossy, because `36`
 and `"36"` write the same.
+
+## Streaming bodies
+
+`Endpoint::invoke` keeps the collected bytes behavior and existing bounds.
+Through `Kernel::issue_body`, `as=application/x-ndjson` on native targets answers a
+one-shot stream with one jq result per chunk, including its trailing newline.
+Backpressure holds at most one queued result; dropping the reader stops evaluation.
+The input JSON document is still read whole under the byte budget and input bound.
+Each serialized result must fit the run's byte budget; the existing total output,
+fuel, time, and value bounds also apply. Slow readers count toward the sandbox's
+time budget. A failure after some results is an error item, never a clean end.
+One-shot NDJSON answers are not cached.
+
+The CSV body path is incremental on native and wasm targets. It uses `csv-core`,
+the reader underlying the `csv` crate, to parse arbitrary input chunk boundaries
+without collecting the CSV or the resulting array. It keeps the header, current
+row, and current input chunk. The header and row must fit the run's byte budget,
+and existing input, row, column, and field bounds still apply. Exceeding a bound
+ends the body with `OverBudget`; malformed records end it with `InvalidArgument`.
+An error never yields a closing bracket that would disguise a partial answer.
+A replayable input produces a replayable output, but its length is unknown and
+core's bounded cache declines it. A one-shot input produces a one-shot output.
+
+On wasm, jq NDJSON still uses the existing bounded collected evaluation before
+returning its one-shot body: the native evaluation worker requires threads. CSV
+streaming does not require threads.
 
 ## The jq sandbox
 

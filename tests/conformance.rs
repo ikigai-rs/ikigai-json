@@ -32,8 +32,10 @@ fn conforms() {
         .fixture(Fixture::new("json-from-csv", Verb::Source).arg("content", "a,b\n1,2\n"))
         .fixture(Fixture::new("json-to-csv", Verb::Source).arg("content", r#"[{"a":1}]"#))
         .cacheable("json-query")
-        .pure("json-from-csv")
-        .cacheable("json-from-csv")
+        .opt_out_check(
+            "json-from-csv", Check::Cacheable,
+            "incremental JSON has unknown length; core's bounded cache declines it without collecting",
+        )
         .pure("json-to-csv")
         .cacheable("json-to-csv")
         // The host's files: stand-ins for ikigai-fs, so held to its standard there.
