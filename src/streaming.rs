@@ -85,7 +85,7 @@ impl Endpoint for Query {
             }
         };
         let limit = usize::try_from(pool.remaining()).unwrap_or(usize::MAX);
-        let body = jq_body(program, input, limit)?;
+        let body = jq_body(program, input, limit, inv)?;
         Ok(Representation::from_body(ReprType::new(NDJSON), body).cacheable())
     }
 
@@ -101,7 +101,9 @@ impl Endpoint for Query {
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn jq_body(program: String, input: Bytes, limit: usize) -> Result<Body> {
+fn jq_body(program: String, input: Bytes, limit: usize, _inv: &Invocation<'_>) -> Result<Body> {
+    // The detached native worker retains its monotonic deadline: Invocation borrows
+    // the request and cannot outlive this call. Wasm evaluates below with inv.now().
     use futures::{channel::mpsc, SinkExt};
     let (mut sender, receiver) = mpsc::channel(0);
     // A zero-capacity channel admits one in-flight result. Dropping the consumer
@@ -147,14 +149,15 @@ fn jq_body(program: String, input: Bytes, limit: usize) -> Result<Body> {
 }
 
 #[cfg(target_family = "wasm")]
-fn jq_body(program: String, input: Bytes, limit: usize) -> Result<Body> {
+fn jq_body(program: String, input: Bytes, limit: usize, inv: &Invocation<'_>) -> Result<Body> {
     // wasm has no worker threads. Keep the existing sandbox's bounded evaluation;
     // CSV remains incremental on this target as well.
     let limits = sandbox::Limits {
         max_output_bytes: sandbox::MAX_OUTPUT_BYTES.min(limit),
         ..sandbox::Limits::default()
     };
-    let outputs = sandbox::run(&program, &input, &limits).map_err(jq_refusal)?;
+    let outputs =
+        sandbox::run_with_clock(&program, &input, &limits, &|| inv.now()).map_err(jq_refusal)?;
     let answer = crate::answer(outputs, NDJSON)?;
     if answer.bytes.len() > limit {
         return Err(over("the NDJSON output exceeds the byte budget"));

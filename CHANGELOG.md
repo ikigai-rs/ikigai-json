@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.1 (unreleased)
+
+- The jq sandbox's deadline reads the kernel's clock on every target, wasm included:
+  the meter polls it at the existing 1024-fuel cadence, so a query past its time budget
+  is refused on wasm too (ledger #2196). New `sandbox::run_with_clock`; a fixed or absent
+  clock still leaves fuel enforcement in place.
+
+## 0.3.0
 
 - Add a one-shot NDJSON body for jq results on native targets, with backpressure,
   cancellation, per-value byte bounds, and terminal error items. jq still reads a
