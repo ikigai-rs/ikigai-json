@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-json"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "JSON and CSV as resources for ikigai: urn:json:query runs a jq program (jaq) over any resource, and CSV reads as JSON through a registered transreptor."
@@ -12,10 +12,9 @@ keywords = ["ikigai", "roc", "jq", "csv", "json"]
 categories = ["wasm", "parser-implementations"]
 
 [dependencies]
-# 0.1.108 is the true minimum: `Error::OverBudget`, the error a computation that ran past
-# a bound the caller holds is (fuel, time). `AsyncFnEndpoint`, `space_iri` and the
-# name-dropping `bind` are older. Under 0.x a caret is a range: every 0.1.x from 0.1.108.
-ikigai-core = "0.1.108"
+# 0.2.0 is the streams release (ledger #2261). Under 0.x rules, the old
+# 0.1 pin meant <0.2.0.
+ikigai-core = "0.2.0"
 # jaq: a jq implementation in Rust (MIT, Michael Faerber). 3.1 is the line whose parser
 # and compiler API (`load::parse`, `Loader::new(prelude)`, `Native::with_update`) the
 # sandbox rewrites programs through; its syntax tree is matched exhaustively, so a new
@@ -30,4 +29,4 @@ csv = "1.4"
 
 [dev-dependencies]
 futures = "0.3"
-ikigai-conformance = "0.10.0"
+ikigai-conformance = "0.11.0"
