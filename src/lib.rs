@@ -303,7 +303,9 @@ fn from_csv_bytes() -> FnEndpoint {
             .input(
                 ArgSpec::new("content")
                     .summary("the CSV, filled from the pipe")
-                    .class(XSD_STRING),
+                    .class(XSD_STRING)
+                    // Streamed through `content_body` by the body path (src/streaming.rs).
+                    .reads_body(),
             )
             .input(
                 ArgSpec::new("header")

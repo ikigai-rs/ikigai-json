@@ -6,6 +6,11 @@
   the meter polls it at the existing 1024-fuel cadence, so a query past its time budget
   is refused on wasm too (ledger #2196). New `sandbox::run_with_clock`; a fixed or absent
   clock still leaves fuel enforcement in place.
+- `json-from-csv` declares its `content` argument `reads_body`, since its body path
+  streams it through `content_body`: since core 0.2.3 an undeclared reference
+  argument is collected before the endpoint runs, so a large or streamed CSV failed
+  `OverBudget` (ledger #2571). Requires ikigai-core 0.2.4, the release whose contracts
+  publish `reads_body`. Conformance 0.12.0 (`BODIES`, `BODY-INPUTS`) runs in the tests.
 
 ## 0.3.0
 
