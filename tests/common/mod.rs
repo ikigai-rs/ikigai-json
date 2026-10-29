@@ -5,8 +5,8 @@
 
 use futures::executor::block_on;
 use ikigai_core::{
-    ArgRef, Capability, Description, Error, Exact, FnEndpoint, Invocation, Iri, Kernel, ReprType,
-    Representation, Request, Verb,
+    ArgRef, Capability, Description, EndpointSpace, Error, Exact, FnEndpoint, Invocation, Iri,
+    Kernel, MemoryContentStore, ReprType, Representation, Request, Verb,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -23,6 +23,10 @@ pub const PEOPLE_CSV: &str = "name,age\r\nAda,36\r\nGrace,85\r\n";
 
 pub struct Host {
     pub kernel: Kernel,
+    /// The space the kernel was built from, shared, for the conformance suite's `BODIES`.
+    pub space: Arc<EndpointSpace>,
+    /// The kernel's content store, shared, for the conformance suite's `BODY-INPUTS`.
+    pub store: Arc<MemoryContentStore>,
     /// The JSON behind [`PEOPLE_IRI`], editable in place.
     pub people: Arc<RwLock<String>>,
     /// How many times [`PEOPLE_IRI`] has been read.
@@ -108,8 +112,12 @@ impl Host {
                 file("test-html", "text/html", text("<p>hi</p>"), true, none()),
             )
             .bind(Exact::new(SECRET_IRI), secret());
+        let space = Arc::new(space);
+        let store = Arc::new(MemoryContentStore::new(1024 * 1024));
         Host {
-            kernel: Kernel::new(Arc::new(space)),
+            kernel: Kernel::new(space.clone()).with_content_store(store.clone()),
+            space,
+            store,
             people,
             reads,
         }

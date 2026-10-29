@@ -6,6 +6,10 @@
 //! - `json-query` is `cacheable` over the threaded file it reads: its answer takes its expiry
 //!   and golden thread from `src` (`tests/endpoints.rs` cuts it). It is not pure: it reads
 //!   `src`.
+//! - `json-from-csv` declares `content` `reads_body` (its body path streams it), so
+//!   `BODY-INPUTS` compares it inline, by reference, stored and attached; `BODIES` compares
+//!   every deterministic `Source`'s `invoke` with its `invoke_body`. `test-live` is live, so
+//!   `BODIES` leaves it unprobed with the suite's own reason; nothing else may be.
 //! - `space()` is self-named `urn:iki:space:json`: it takes no parameters and reads nothing
 //!   while it is built.
 
@@ -14,6 +18,7 @@ mod common;
 use common::{Host, PEOPLE_IRI};
 use ikigai_conformance::{Check, Fixture, Suite};
 use ikigai_core::Verb;
+use std::sync::Arc;
 
 const ENDPOINTS: [&str; 3] = ["json-query", "json-from-csv", "json-to-csv"];
 
@@ -44,9 +49,22 @@ fn conforms() {
         .opt_out_check("test-html", Check::Cacheable, WATCHER_CUT)
         .pure("test-secret")
         .self_named_space("json", ikigai_json::space)
+        .body_space(Arc::clone(&host.space))
+        .body_input_store(Arc::clone(&host.store))
         .run_blocking(&host.kernel);
     println!("{report}");
     assert!(report.is_clean(), "{report}");
+    // The body wiring cannot fall off silently: the only unprobed action is the live file.
+    let unprobed: Vec<_> = report
+        .unprobed
+        .iter()
+        .map(|u| (u.endpoint.as_str(), u.check))
+        .collect();
+    assert_eq!(unprobed, [("test-live", Check::Bodies)], "{report}");
+    assert!(
+        report.to_string().contains("body-inputs: json-from-csv"),
+        "BODY-INPUTS compared json-from-csv's `content`: {report}"
+    );
     assert_eq!(
         ikigai_core::space_iri("json").as_str(),
         ikigai_json::SPACE_ID
