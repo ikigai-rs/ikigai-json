@@ -187,3 +187,9 @@ MIT OR Apache-2.0, at your option.
 This crate depends on [jaq](https://github.com/01mf02/jaq) (`jaq-core`, `jaq-std`, `jaq-json`),
 copyright Michael Färber, under the MIT license, and on
 [csv](https://github.com/BurntSushi/rust-csv), copyright Andrew Gallant, under MIT or Unlicense.
+
+## Accessibility
+
+What this crate emits that people read (JSON, CSV and text answers, and error messages), the rules
+that output follows, how it is tested and how to report a barrier are in
+[ACCESSIBILITY.md](ACCESSIBILITY.md).
