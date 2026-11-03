@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Require ikigai-core 0.3.0, whose content store scopes held content to the
+  deliverer's capability (ledger #2965). Public APIs now use core 0.3 types.
+- Run the module conformance suite against ikigai-conformance 0.14.0.
+
 ## 0.3.2
 
 - `json-from-csv` declares its `content` argument `reads_body`, since its body path
