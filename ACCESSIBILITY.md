@@ -11,7 +11,7 @@ Adapted from the [ACCESSIBILITY.md template](https://github.com/mgifford/ACCESSI
 | Status | Evaluation in progress. No conformance claim. |
 | Owner | the maintainers of this repository |
 | Report a barrier | [a GitHub issue](https://github.com/ikigai-rs/ikigai-json/issues/new?labels=accessibility) with the `accessibility` label; anything security-sensitive through [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-json/security/advisories/new) |
-| Last reviewed | 2026-10-31 |
+| Last reviewed | 2026-11-12 |
 
 ## What it emits that people read
 
@@ -32,7 +32,8 @@ markup are the template's), and the page, error page or terminal a host shows an
 
 ## The rules that output follows
 
-Followed by reading the source:
+Recorded by source review on 2026-10-31; this historical review is Blocked below, not
+a current test result:
 
 - A refusal is an `InvalidArgument` naming the argument it is about (`q`, `src`, `as`, `header`,
   `content`) or an `OverBudget`, with a sentence that says what happened: the bound and its
@@ -46,15 +47,29 @@ Followed by reading the source:
 
 ## How it is tested
 
-- `tests/endpoints.rs`: `refusals_are_typed_and_name_the_argument`,
-  `a_src_nothing_converts_is_refused_naming_src`, `dollar_j_splices_a_single_scalar_as_bare_text`,
-  `csv_endpoints_round_trip_and_refuse_what_they_cannot_hold` and `csv_edge_cases` check that
-  refusals name the argument and carry the words that explain them (the record number, `twice`,
-  the bound's name).
-- `tests/sandbox.rs` checks that an excluded builtin is refused with its reason (`environment`,
-  `not available`), and `a_syntax_error_says_where` that a parse error says what was expected.
-- **No automated accessibility checker, browser or assistive technology has been used on this
-  output.**
+Every named check has a result: Pass, Fail or Blocked, with evidence. A Pass covers only
+that check, not overall accessibility. The current tests below ran on 2026-11-12 against
+main at `7b780f7b3b3af9600dacbc21af08a5acc9e528ab`, before this documentation change,
+using Cargo 1.99.1 and rustc 1.99.1. The command was
+`cargo test --test endpoints --test sandbox`: 11 endpoint tests and 24 sandbox tests passed.
+CI's `cargo test --workspace` repeats these suites; it does not run assistive technology or
+render a host's output.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Endpoint refusal arguments and explanatory text | Pass | `tests/endpoints.rs`: `refusals_are_typed_and_name_the_argument`, `a_src_nothing_converts_is_refused_naming_src`, `csv_endpoints_round_trip_and_refuse_what_they_cannot_hold` and `csv_edge_cases`, run with the command and versions above. Checks argument names, the CSV record number, duplicate-header wording and named bounds; does not evaluate every message's clarity or recovery guidance. |
+| Bare scalar text, JSON, NDJSON and CSV answer shapes | Pass | `tests/endpoints.rs`: `dollar_j_splices_a_single_scalar_as_bare_text`, `one_result_is_that_value_and_several_are_an_array`, `ndjson_is_one_result_per_line` and `csv_endpoints_round_trip_and_refuse_what_they_cannot_hold`, run with the command and versions above. Checks returned data, not host markup, escaping, reading order or presentation. |
+| Excluded-builtin reasons and syntax-error wording | Pass | `tests/sandbox.rs`: `each_excluded_definition_is_refused_by_name` and `a_syntax_error_says_where`, run with the command and versions above. Checks `environment`, `not available` and `expected`; does not establish that a person can locate or recover from every error. |
+| Source review of refusal guidance, clipping and plain-text output | Blocked | Historical source review dated 2026-10-31 described in “The rules that output follows” and “Known limitations”; its command and tool version were not recorded and CI does not repeat that review. The tests above cover only their stated assertions. |
+| Wasm bound-refusal behavior | Blocked | The 2026-10-31 source review identified the abort limitation below; no current wasm runtime evaluation was performed. CI's wasm library lint compiles code but does not exercise refusal delivery in a browser. |
+| Automated accessibility checker | Blocked | No axe or other accessibility checker was run on this output; no rendered host page or browser checker is configured in this repository's CI. Rust tests are not accessibility checkers. |
+| Browser presentation, zoom, reflow and contrast | Blocked | No browser evaluation was performed. This crate supplies text data; a host page is needed to evaluate its presentation. |
+| Manual keyboard | Blocked | No person performed a keyboard pass on the probe or a host presenting this output; no interactive evaluation session was available for this update. |
+| Screen reader | Blocked | No screen reader session was available or used on this output for this update. |
+| Screen magnifier | Blocked | No screen magnifier session was available or used on this output for this update. |
+| Speech input | Blocked | No speech-input session was available or used on this output for this update. |
+| Switch access | Blocked | No switch-access session was available or used on this output for this update. |
+| Braille display | Blocked | No braille display was available or used on this output for this update. |
 
 ## Known limitations
 
@@ -73,7 +88,10 @@ Found by reading the source on 2026-10-31, not by testing:
 
 Read this file before changing any output listed above: an answer's shape or an error message.
 Keep an error a sentence that names the argument and says what to do. Say in the pull request what
-was tested, with what, and what was not.
+was tested in a `Check | Result | Evidence` table. Give every named check a Pass, Fail or
+Blocked result, with the test or command and tool version, or why it could not run. Keep unrun
+assistive technology checks and historical evaluations CI does not repeat as Blocked, with
+the historical date where known.
 
 ## Reporting a barrier
 
@@ -89,3 +107,4 @@ technology, if you are comfortable sharing them. Anything security-sensitive goe
 | Date | Change |
 |---|---|
 | 2026-10-31 | First version. |
+| 2026-11-12 | Record current main test evidence and explicit Blocked checks; retain historical source-review limitations. |
