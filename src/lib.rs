@@ -54,8 +54,8 @@ pub use csv_json::{csv_to_json, json_to_csv, CsvRefusal};
 pub use scan::{nesting, MAX_JSON_NESTING};
 
 use ikigai_core::{
-    space_iri, ArgRef, ArgSpec, AsyncFnEndpoint, Description, EndpointSpace, Error, Exact,
-    FnEndpoint, Invocation, Iri, ReprType, Representation, Request, Result, Verb,
+    media_type_essence, space_iri, ArgRef, ArgSpec, AsyncFnEndpoint, Description, EndpointSpace,
+    Error, Exact, FnEndpoint, Invocation, Iri, ReprType, Representation, Request, Result, Verb,
 };
 
 /// The media type of a JSON answer.
@@ -114,12 +114,7 @@ fn wanted<'a>(inv: &Invocation<'_>, allowed: &[&'a str]) -> Result<&'a str> {
 }
 
 fn is_json(media: &str) -> bool {
-    let bare = media
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
+    let bare = media_type_essence(media);
     bare == JSON || bare == "text/json" || bare.ends_with("+json")
 }
 
@@ -401,4 +396,30 @@ pub fn query() -> impl ikigai_core::Endpoint {
 /// The CSV endpoint, with an incremental body path beside the bounded bytes path.
 pub fn from_csv() -> impl ikigai_core::Endpoint {
     streaming::FromCsv(from_csv_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_json;
+
+    #[test]
+    fn json_media_types_ignore_case_and_parameters() {
+        for media in [
+            "application/json",
+            "Application/JSON; charset=UTF-8",
+            "application/ld+json;profile=\"x\"",
+            " TEXT/JSON ; charset=utf-8 ",
+            "APPLICATION/PROBLEM+JSON",
+        ] {
+            assert!(is_json(media), "{media}");
+        }
+        for media in [
+            "",
+            "text/plain",
+            "application/jsonp",
+            "application/json+xml",
+        ] {
+            assert!(!is_json(media), "{media}");
+        }
+    }
 }
