@@ -64,7 +64,9 @@ fn file(
 fn secret() -> FnEndpoint {
     FnEndpoint::new("test-secret", |inv: &Invocation<'_>| {
         if !inv.capability.allows(SECRET_SCOPE) {
-            return Err(Error::Denied(format!("reading this needs {SECRET_SCOPE}")));
+            return Err(Error::Denied(
+                format!("reading this needs {SECRET_SCOPE}").into(),
+            ));
         }
         Ok(Representation::new(
             ReprType::new("application/json"),
