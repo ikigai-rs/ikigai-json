@@ -6,7 +6,9 @@
 //! runner, in a child it reads as a failed test with the signal named. The child calls the
 //! sandbox from a 2 MiB thread, the size of a tokio worker's.
 
-use ikigai_json::sandbox::{run, Limits, Refusal, AVAILABLE, DROPPED_DEFS, EXCLUDED, WRAPPED};
+use ikigai_json::sandbox::{
+    reserved_names, run, Limits, Refusal, AVAILABLE, DROPPED_DEFS, EXCLUDED, WRAPPED,
+};
 use std::process::Command;
 
 fn jq(program: &str, input: &str) -> Result<Vec<String>, Refusal> {
@@ -463,9 +465,107 @@ const HOSTILE: &[&str] = &[
     "def f: try f catch f; f",
 ];
 
+/// Programs that name the sandbox's own definitions: a direct call to every raw native behind a
+/// guard and every internal native (from the code, so one added later is covered), a definition,
+/// an argument and bindings under the reserved prefix, each also inside `try` and `?`. Each must
+/// be refused as a program error, before anything runs.
+fn reserved() -> Vec<String> {
+    let raw = WRAPPED.iter().map(|w| {
+        let (name, arity) = w.split_once('/').unwrap();
+        format!("__iki_{name}/{arity}")
+    });
+    let mut names: Vec<String> = raw.chain(reserved_names()).collect();
+    names.sort();
+    names.dedup();
+    let mut programs: Vec<String> = names
+        .iter()
+        .map(|id| {
+            let (name, arity) = id.split_once('/').unwrap();
+            match arity.parse::<usize>().unwrap() {
+                0 => name.to_string(),
+                n => format!("{name}({})", vec!["."; n].join("; ")),
+            }
+        })
+        .collect();
+    programs.extend(
+        [
+            "def __iki_x: 1; __iki_x",
+            "def f($__iki_rhs): $__iki_rhs; f(1)",
+            "def f(__iki_g): __iki_g; f(1)",
+            ". as $__iki_rhs | $__iki_rhs",
+            ". as [$__iki_rhs] | 1",
+            ". as {a: $__iki_rhs} | 1",
+            "reduce range(3) as $__iki_rhs (0; . + 1)",
+            "foreach range(3) as [$__iki_rhs] (0; . + 1)",
+            "label $__iki_out | 1, break $__iki_out",
+            "def f: def __iki_y: 1; __iki_y; [f]",
+            "{a: 1} | .[__iki_tick]",
+            "\"\\(__iki_tick)\"",
+            "if true then __iki_tick else 1 end",
+        ]
+        .map(String::from),
+    );
+    let bare = programs.clone();
+    for p in bare {
+        programs.push(format!("try ({p}) catch \"caught\""));
+        programs.push(format!("({p})?"));
+        programs.push(format!("[({p})?]"));
+    }
+    programs
+}
+
+/// The hostile programs, then the reserved-name programs.
+fn hostile() -> Vec<String> {
+    HOSTILE
+        .iter()
+        .map(|p| p.to_string())
+        .chain(reserved())
+        .collect()
+}
+
+#[test]
+fn the_raw_natives_behind_the_guards_are_not_callable() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run(
+            "last(__iki_range(0; 1e18; 1))",
+            b"null",
+            &Limits::default(),
+        ));
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(15)) {
+        Ok(Err(Refusal::Program(_) | Refusal::Bound { .. } | Refusal::Timeout(_))) => {}
+        Ok(other) => panic!("a raw native ran: {other:?}"),
+        Err(_) => {
+            panic!("a raw native ran past the 5 s budget and every fuel bound (killed at 15 s)")
+        }
+    }
+}
+
+#[test]
+fn the_wrapped_builtins_still_answer_by_their_public_names() {
+    assert_eq!(one("[range(0; 10; 3)]", "null"), "[0,3,6,9]");
+    assert_eq!(one("last(range(5))", "null"), "4");
+    assert_eq!(one("tojson", "[1]"), r#""[1]""#);
+    assert_eq!(one("explode", r#""ab""#), "[97,98]");
+    assert_eq!(
+        one("sort_by(.a) | map(.a)", r#"[{"a":2},{"a":1}]"#),
+        "[1,2]"
+    );
+    assert_eq!(one(". += 1", "1"), "2");
+    // A name that only resembles the prefix is the caller's own.
+    assert_eq!(
+        one("def _iki_x: 1; def iki_y: 2; _iki_x + iki_y", "null"),
+        "3"
+    );
+}
+
 #[test]
 fn hostile_programs_are_refused_and_abort_nothing() {
-    for (i, program) in HOSTILE.iter().enumerate() {
+    let programs = hostile();
+    assert!(programs.iter().any(|p| p.starts_with("__iki_range(")));
+    assert!(programs.iter().any(|p| p == "__iki_tick"));
+    for (i, program) in programs.iter().enumerate() {
         let out = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "probe_child", "--nocapture", "--test-threads=1"])
             .env(PROBE, i.to_string())
@@ -486,6 +586,12 @@ fn hostile_programs_are_refused_and_abort_nothing() {
             verdict.starts_with("refused"),
             "`{program}` must be refused: {verdict}"
         );
+        if i >= HOSTILE.len() {
+            assert!(
+                verdict.starts_with("refused: the jq program is not runnable here"),
+                "`{program}` names a reserved name and must be refused as a program error: {verdict}"
+            );
+        }
         eprintln!("{program:.60}  →  {verdict:.120}");
     }
 }
@@ -495,10 +601,10 @@ fn probe_child() {
     let Ok(index) = std::env::var(PROBE) else {
         return;
     };
-    let program = HOSTILE[index.parse::<usize>().unwrap()];
+    let program = hostile().swap_remove(index.parse::<usize>().unwrap());
     let verdict = std::thread::Builder::new()
         .stack_size(2 << 20)
-        .spawn(move || match run(program, b"null", &Limits::default()) {
+        .spawn(move || match run(&program, b"null", &Limits::default()) {
             Ok(out) => format!("answered {} results", out.len()),
             Err(e) => format!("refused: {e}"),
         })

@@ -1046,6 +1046,98 @@ fn rewrite_def(d: Def<&str>) -> Def<&str> {
 /// The name the user's program is defined under, as the prelude's last definition.
 const MAIN: &str = "__iki_main";
 
+// --- the reserved names -----------------------------------------------------------------------
+
+/// The prefix of every name the sandbox defines for itself: the raw natives behind the guards,
+/// the guard natives, the program's own definition and the variable `op=` binds. A caller's
+/// program may not name, define or bind any of them.
+const RESERVED: &str = "__iki_";
+
+/// Whether `name` (a filter, argument, variable or label, with or without its `$`) is reserved.
+fn is_reserved(name: &str) -> bool {
+    name.strip_prefix('$').unwrap_or(name).starts_with(RESERVED)
+}
+
+/// The first reserved name the caller's program names anywhere, before it is rewritten (the
+/// rewrite introduces reserved names of its own). Recursion is bounded by the program's size,
+/// like the rewrite's.
+fn reserved_in<'s>(t: &T<'s>) -> Option<&'s str> {
+    let all = |ts: &[T<'s>]| ts.iter().find_map(reserved_in);
+    match t {
+        Term::Id | Term::Recurse | Term::Num(_) => None,
+        Term::Var(x) | Term::Break(x) => is_reserved(x).then_some(*x),
+        Term::Str(fmt, parts) => fmt.filter(|f| is_reserved(f)).or_else(|| {
+            parts.iter().find_map(|p| match p {
+                load::lex::StrPart::Term(t) => reserved_in(t),
+                _ => None,
+            })
+        }),
+        Term::Arr(f) => f.as_deref().and_then(reserved_in),
+        Term::Obj(kvs) => kvs
+            .iter()
+            .find_map(|(k, v)| reserved_in(k).or_else(|| v.as_ref().and_then(reserved_in))),
+        Term::Neg(t) => reserved_in(t),
+        Term::BinOp(l, op, r) => reserved_in(l)
+            .or_else(|| match op {
+                BinaryOp::Pipe(Some(p)) => reserved_in_pattern(p),
+                _ => None,
+            })
+            .or_else(|| reserved_in(r)),
+        Term::Label(x, t) => is_reserved(x).then_some(*x).or_else(|| reserved_in(t)),
+        Term::Fold(_, xs, pat, args) => reserved_in(xs)
+            .or_else(|| reserved_in_pattern(pat))
+            .or_else(|| all(args)),
+        Term::TryCatch(t, c) => reserved_in(t).or_else(|| c.as_deref().and_then(reserved_in)),
+        Term::IfThenElse(branches, els) => branches
+            .iter()
+            .find_map(|(c, t)| reserved_in(c).or_else(|| reserved_in(t)))
+            .or_else(|| els.as_deref().and_then(reserved_in)),
+        Term::Def(defs, body) => defs
+            .iter()
+            .find_map(|d| {
+                std::iter::once(&d.name)
+                    .chain(&d.args)
+                    .find(|x| is_reserved(x))
+                    .copied()
+                    .or_else(|| reserved_in(&d.body))
+            })
+            .or_else(|| reserved_in(body)),
+        Term::Call(name, args) => is_reserved(name).then_some(*name).or_else(|| all(args)),
+        Term::Path(t, path) => reserved_in(t).or_else(|| {
+            path.0.iter().find_map(|(part, _)| match part {
+                jaq_core::path::Part::Index(i) => reserved_in(i),
+                jaq_core::path::Part::Range(from, upto) => from
+                    .as_ref()
+                    .and_then(reserved_in)
+                    .or_else(|| upto.as_ref().and_then(reserved_in)),
+            })
+        }),
+    }
+}
+
+fn reserved_in_pattern<'s>(p: &Pattern<&'s str>) -> Option<&'s str> {
+    match p {
+        Pattern::Var(x) => is_reserved(x).then_some(*x),
+        Pattern::Arr(ps) => ps.iter().find_map(reserved_in_pattern),
+        Pattern::Obj(kps) => kps
+            .iter()
+            .find_map(|(k, p)| reserved_in(k).or_else(|| reserved_in_pattern(p))),
+    }
+}
+
+/// Every name the sandbox defines for itself, as `name/arity`: the natives it registers under
+/// the reserved prefix and the program's own definition. For the tests, which call each one.
+#[doc(hidden)]
+pub fn reserved_names() -> Vec<String> {
+    let mut names: Vec<String> = natives()
+        .into_iter()
+        .filter(|(name, _, _)| is_reserved(name))
+        .map(|(name, args, _)| format!("{name}/{}", args.len()))
+        .collect();
+    names.push(format!("{MAIN}/0"));
+    names
+}
+
 /// A builtin's `'static` strings, seen as the program's shorter lifetime.
 fn shorten<'s>(d: Def<&'static str>) -> Def<&'s str> {
     d
@@ -1345,6 +1437,12 @@ fn evaluate(
         .map_err(|e| Refusal::Program(describe_load_errors(e)))?;
     let term = load::parse(program, |p| p.term())
         .ok_or_else(|| Refusal::Program("the program does not parse as a single filter".into()))?;
+    if let Some(name) = reserved_in(&term) {
+        return Err(Refusal::Program(format!(
+            "`{}` is a reserved name: `{RESERVED}…` names are reserved for the sandbox",
+            clip(name)
+        )));
+    }
 
     let arena = Arena::default();
     let modules = Loader::new(prelude(term))
