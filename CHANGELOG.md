@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- A program can no longer name the sandbox's internal definitions.
+
 ## 0.4.0
 
 - Require ikigai-core 0.3.0, whose content store scopes held content to the
